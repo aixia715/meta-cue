@@ -177,13 +177,14 @@ internal sealed class CueApplication : ApplicationContext
                 bool changed = found.Count != positions.Count;
                 for (int i = 0; !changed && i < found.Count; i++) changed = found[i] != positions[i];
                 if (changed) Cancel();
+                else overlay.RaiseWithoutActivation();
                 lastRefresh = elapsed.ElapsedMilliseconds;
                 return;
             }
             positions = found;
             if (preview || elapsed.ElapsedMilliseconds >= delay) Present();
         }
-        catch (Exception ex) when (ex is System.Windows.Automation.ElementNotAvailableException || ex is COMException || ex is InvalidOperationException)
+        catch (Exception ex) when (ex is System.Windows.Automation.ElementNotAvailableException || ex is COMException || ex is InvalidOperationException || ex is Win32Exception)
         {
             if (!disposed && queries.IsCurrent(ticket))
             { HideHints(); retryAt = Environment.TickCount64 + 100; }

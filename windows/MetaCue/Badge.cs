@@ -61,7 +61,7 @@ internal sealed class Badge : Form
             var blend = new Blend { Alpha = 255, Format = 1 };
             if (!UpdateLayeredWindow(Handle, screen, ref destination, ref size, memory, ref source, 0, ref blend, 2))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
-            if (show) Show();
+            if (show) { Show(); RaiseWithoutActivation(); }
         }
         finally
         {
@@ -70,6 +70,14 @@ internal sealed class Badge : Form
             if (memory != IntPtr.Zero) DeleteDC(memory);
             if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
         }
+    }
+
+    internal void RaiseWithoutActivation()
+    {
+        // Explorer can raise its own topmost taskbar after Start/menu interactions.
+        // TopMost=true alone is cached by WinForms and does not reassert Z order.
+        if (!SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x01 | 0x02 | 0x10 | 0x40))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 
     protected override bool ShowWithoutActivation => true;
@@ -83,6 +91,7 @@ internal sealed class Badge : Form
     [StructLayout(LayoutKind.Sequential, Pack = 1)] private struct Blend { public byte Operation, Flags, Alpha, Format; }
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
     [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
     [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
