@@ -1,4 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net9.0-windows</TargetFramework><UseWindowsForms>true</UseWindowsForms><UseWPF>true</UseWPF><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../MetaCue/MetaCue.csproj" /></ItemGroup>
-</Project>

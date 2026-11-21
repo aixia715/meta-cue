@@ -5,21 +5,11 @@ using System.Windows.Automation;
 
 namespace MetaCue;
 
-internal sealed record TaskbarItem(Rectangle Bounds, string AppId, string Name, AutomationElement Element);
-
 internal static class Taskbar
 {
     internal static List<Rectangle> Read()
     {
-        var items = ReadItems();
         var result = new List<Rectangle>();
-        for (int i = 0; i < Math.Min(10, items.Count); i++) result.Add(items[i].Bounds);
-        return result;
-    }
-
-    internal static List<TaskbarItem> ReadItems()
-    {
-        var result = new List<TaskbarItem>();
         var handle = Native.FindWindow("Shell_TrayWnd", null);
         if (handle == IntPtr.Zero || !Native.IsWindowVisible(handle)) return result;
         var root = AutomationElement.FromHandle(handle);
@@ -31,21 +21,18 @@ internal static class Taskbar
             if (!info.ClassName.Equals("Taskbar.TaskListButtonAutomationPeer", StringComparison.Ordinal) &&
                 !info.ClassName.Equals("TaskListButton", StringComparison.Ordinal)) continue;
             // Skipping an app would shift every later Win+number label.
-            if (info.IsOffscreen || info.BoundingRectangle.IsEmpty) return new List<TaskbarItem>();
+            if (info.IsOffscreen || info.BoundingRectangle.IsEmpty) return new List<Rectangle>();
             var r = info.BoundingRectangle;
-            string id = info.AutomationId;
-            if (!id.StartsWith("Appid:", StringComparison.OrdinalIgnoreCase)) return new List<TaskbarItem>();
-            result.Add(new TaskbarItem(Rectangle.FromLTRB((int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom),
-                id[6..].Trim(), info.Name, buttons[i]));
+            result.Add(Rectangle.FromLTRB((int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom));
         }
-        result.Sort((a, b) => a.Bounds.Left.CompareTo(b.Bounds.Left));
+        result.Sort((a, b) => a.Left.CompareTo(b.Left));
         // Fail closed for vertical/multirow/partially hidden layouts.
         if (result.Count > 0)
         {
             var screen = System.Windows.Forms.Screen.FromHandle(handle).Bounds;
-            if (result.Exists(item => Math.Abs(item.Bounds.Top - result[0].Bounds.Top) > 4 || item.Bounds.Bottom > screen.Bottom || item.Bounds.Top < screen.Bottom - 150)) result.Clear();
+            if (result.Exists(r => Math.Abs(r.Top - result[0].Top) > 4 || r.Bottom > screen.Bottom || r.Top < screen.Bottom - 150)) result.Clear();
         }
-        return result;
+        return result.GetRange(0, Math.Min(10, result.Count));
     }
 
     internal static string Diagnose()
