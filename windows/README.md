@@ -1,5 +1,9 @@
 # Meta Cue for Windows
 
+![Meta Cue 图标](assets/meta-cue.png)
+
+程序与托盘使用“数字提示气泡 + 任务栏”图标，矢量源文件和多尺寸 ICO 位于 `windows/assets/`。修改后可运行 `python windows/assets/generate_icon.py`（需要 Pillow）重新生成；正常构建直接使用已提交的图标，不需要 Python。
+
 原生 WinForms 托盘程序，目标是 Windows 11 的原生 Explorer 底部单行任务栏。长按左或右 Win（默认 300 ms），在主任务栏前十个应用按钮上显示 1～9、0；第十个应用对应 Win+0，松开或按其他键隐藏。使用 Windows 原有 Win+数字切换，无主窗口，不修改任务栏或快捷键，不自动设置登录启动。
 
 ## 构建与运行

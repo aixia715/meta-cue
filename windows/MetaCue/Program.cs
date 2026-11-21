@@ -37,6 +37,7 @@ internal sealed class CueApplication : ApplicationContext
     private readonly Native.HookProc callback;
     private readonly IntPtr hook;
     private readonly NotifyIcon tray;
+    private readonly Icon trayIcon;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 40 };
     private readonly Control dispatcher = new();
     private readonly Badge overlay = new();
@@ -62,7 +63,11 @@ internal sealed class CueApplication : ApplicationContext
         menu.Items.Add(toggle);
         menu.Items.Add("重新读取延迟配置", null, (_, _) => { Cancel(); LoadDelay(); });
         menu.Items.Add("退出", null, (_, _) => ExitThread());
-        tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Meta Cue — 长按 Win 显示编号", ContextMenuStrip = menu, Visible = true };
+        using (var stream = typeof(CueApplication).Assembly.GetManifestResourceStream("MetaCue.Icon")
+            ?? throw new InvalidOperationException("Meta Cue icon resource is missing."))
+        using (var source = new Icon(stream, SystemInformation.SmallIconSize))
+            trayIcon = (Icon)source.Clone();
+        tray = new NotifyIcon { Icon = trayIcon, Text = "Meta Cue — 长按 Win 显示编号", ContextMenuStrip = menu, Visible = true };
         tray.DoubleClick += (_, _) => StartPreview();
         timer.Tick += Tick;
         SystemEvents.SessionSwitch += SessionChanged;
@@ -225,7 +230,7 @@ internal sealed class CueApplication : ApplicationContext
             SystemEvents.DisplaySettingsChanged -= DisplayChanged;
             Native.UnhookWindowsHookEx(hook);
             Cancel(); timer.Dispose(); overlay.Dispose();
-            tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); dispatcher.Dispose();
+            tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); trayIcon.Dispose(); dispatcher.Dispose();
         }
         base.Dispose(disposing);
     }

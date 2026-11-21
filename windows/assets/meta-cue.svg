@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Meta Cue — taskbar number hint</title>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#416A9A"/>
+  <rect x="3" y="3" width="58" height="58" rx="14" fill="#183558"/>
+  <path d="M29 38H35L32 43Z" fill="#B7F3FF"/>
+  <rect x="18" y="8" width="28" height="31" rx="7" fill="#B7F3FF"/>
+  <path d="M29 15H34V32H38V36H26V32H30V21L26 23V18Z" fill="#183558"/>
+  <g fill="#87A7CE"><rect x="10" y="47" width="12" height="9" rx="2"/>
+    <rect x="42" y="47" width="12" height="9" rx="2"/></g>
+  <rect x="26" y="47" width="12" height="9" rx="2" fill="#50D9E7"/>
+</svg>
