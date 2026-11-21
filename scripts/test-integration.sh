@@ -11,5 +11,5 @@ cp "$build_dir/meta_cue_input.so" "$build_dir/test-plugins/kwin/plugins/meta_cue
 XDG_RUNTIME_DIR="$test_dir/runtime" XDG_CONFIG_HOME="$test_dir/config" \
 QT_PLUGIN_PATH="$test_dir/plugins" QT_QPA_PLATFORM=offscreen KWIN_COMPOSE=Q \
 timeout 20 dbus-run-session kwin_wayland --virtual --width 800 --height 600 \
-    --no-lockscreen --no-kactivities --no-global-shortcuts --socket meta-cue-test \
+    --no-lockscreen --no-kactivities --socket meta-cue-test \
     --exit-with-session "$build_dir/test_integration"

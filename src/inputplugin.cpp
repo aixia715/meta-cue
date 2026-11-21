@@ -11,6 +11,7 @@
 #include <KConfigGroup>
 #include <QDBusConnection>
 #include <QTimer>
+#include <kglobalacceld.h>
 
 class MetaCueInput final : public KWin::Plugin, public KWin::InputEventSpy {
     Q_OBJECT
@@ -21,6 +22,12 @@ public:
         heartbeat.setInterval(100);
         connect(&delay, &QTimer::timeout, this, [this] {
             if (gesture.eligible() && !KWin::waylandServer()->isScreenLocked()) {
+                // Suppress only this modifier-only sequence. Do not consume Meta
+                // releases or alter Meta+number / other combined shortcuts.
+                auto *daemon = qobject_cast<KGlobalAccelD *>(QDBusConnection::sessionBus().objectRegisteredAt("/kglobalaccel"));
+                if (daemon && daemon->interface()) {
+                    QMetaObject::invokeMethod(daemon->interface(), "cancelModiferOnlySequence", Qt::DirectConnection);
+                }
                 active = true;
                 heartbeat.start();
                 Q_EMIT VisibleChanged(true);
@@ -54,7 +61,7 @@ public:
         }
     }
 public Q_SLOTS:
-    QString Version() const { return QStringLiteral("0.1.0 / KWin " KWIN_PLUGIN_VERSION_STRING); }
+    QString Version() const { return QStringLiteral("0.1.2 / KWin " KWIN_PLUGIN_VERSION_STRING); }
 Q_SIGNALS:
     void VisibleChanged(bool visible);
 private:

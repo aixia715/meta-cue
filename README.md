@@ -2,6 +2,8 @@
 
 给现有 KDE 原生任务栏添加 Meta＋数字提示。按住 Meta 300 毫秒后，在图标上沿显示 1～9；松开或组成其他快捷键时消失。
 
+数字提示触发后，松开 Meta 只隐藏数字，不弹出应用启动器。未达到显示延迟的短按 Meta 仍正常打开启动器。Meta＋反引号保持 KDE 原有快捷键行为，不再作为专用取消键。
+
 ![当前桌面预览](docs/taskbar-preview.png)
 
 ## 当前状态
@@ -12,17 +14,17 @@
 
 ## 设计
 
-- 一个 KWin `InputEventSpy` 插件观察按键，不拦截事件、不改变快捷键、不访问 `/dev/input`，不记录键值或输入文本。
+- 一个 KWin `InputEventSpy` 插件观察按键，不拦截按键事件，在提示触发时取消本次“仅修饰键”快捷键序列，不改写快捷键配置、不访问 `/dev/input`，不记录键值或输入文本。
 - 插件仅通过会话 D-Bus 发送显示/隐藏布尔状态。显示期间每 100 ms 发送心跳；显示组件超过 350 ms 收不到心跳就隐藏。
 - 不可见的独立 Plasma 桌面组件查找原生 `org.kde.plasma.icontasks`，在实际任务项上添加不接收鼠标的角标。没有复制任务模型，也没有改动系统任务栏文件。
 - 角标处于原生面板场景中，沿用原生缩放、裁剪、遮挡和输出位置。读取当前快捷键，只标有对应 Meta+数字绑定的项目。
 - 首版仅支持一个底部、单行的原生仅图标任务管理器。编辑、拖动、重排过渡或无法识别时暂停显示。
 
-使用 KWin 和 Plasma 的内部 C++ / QML 接口，**升级 KWin 后需要重新编译**。KWin 的插件版本校验会拒绝不匹配版本，工具不应影响原有快捷键。
+使用 KWin 和 Plasma 的内部 C++ / QML 接口，**升级 KWin、Qt 或 KGlobalAccelD 后需要重新编译**。KWin 的插件版本校验会拒绝不匹配版本，工具不应影响原有快捷键。
 
 ## 编译
 
-本机需 Qt 6、KDE/Plasma/KWin 开发文件，C++23 编译器、CMake、Ninja、ECM 和 Vulkan 头文件。
+本机需 Qt 6、KDE/Plasma/KWin/KGlobalAccelD 开发文件（含 Qt GUI 私有开发头文件），C++23 编译器、CMake、Ninja、ECM 和 Vulkan 头文件。
 
 ```sh
 sudo pacman -S --needed base-devel cmake ninja extra-cmake-modules vulkan-headers
@@ -76,7 +78,7 @@ Enabled=true
 DelayMs=300
 ```
 
-默认无需创建文件。延迟支持 100～2000 ms；每次新的 Meta 手势读取配置。保持 Meta 按下后松开，会继续遵循 KDE 原有应用启动器行为。
+默认无需创建文件。延迟支持 100～2000 ms；每次新的 Meta 手势读取配置。提示触发前松开 Meta 保留原有启动器行为；提示触发后松开不弹出启动器。
 
 ## 停用与卸载
 
@@ -102,3 +104,13 @@ sudo ./scripts/install-input.sh --remove
 - 待验证：当前桌面实际 Meta+数字切换、鼠标交互、热插拔/改变缩放、锁屏和休眠恢复、登录自启。
 
 完整需求在 [docs/requirements.md](docs/requirements.md)。测试用输入驱动只用于独立虚拟会话，安装脚本不会安装它。
+
+## 更新输入插件（0.1.2）
+
+```sh
+sudo ./scripts/install-input.sh
+```
+
+如果旧输入插件已经加载，安装后需注销并重新登录，再执行 `./scripts/meta-cue start`（已启用自启动则无需手动启动）。仅卸载再加载插件可能仍使用 Qt 缓存的旧二进制。
+
+新增隔离测试覆盖：左右 Meta 长按触发提示后松开不打开菜单、下一次短按正常打开菜单、Meta＋反引号继续触发原有快捷键，以及卸载后长按恢复原启动器行为。
