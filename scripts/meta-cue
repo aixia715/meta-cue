@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""User-side lifecycle. Never edits the native task manager or its shortcuts."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
+CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
+PACKAGE = DATA / 'plasma/plasmoids/local.meta-cue'
+ID = 'local.meta-cue'
+
+def dbus(*args, check=True):
+    result = subprocess.run(['qdbus', *args], text=True, capture_output=True, check=check)
+    return result.stdout.strip() if result.returncode == 0 else ''
+
+def plasma(script):
+    return dbus('org.kde.plasmashell', '/PlasmaShell', 'org.kde.PlasmaShell.evaluateScript', script)
+
+def install_display():
+    source = ROOT / 'build/package'
+    if not (source / 'contents/ui/backend/libmetacuebackend.so').exists():
+        raise SystemExit('Build first: cmake --build build')
+    if PACKAGE.exists():
+        raise SystemExit('Display component already installed. Remove it before updating; log out/in after replacing a loaded binary.')
+    backup = DATA / 'meta-cue/backups'
+    backup.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    layout = CONFIG / 'plasma-org.kde.plasma.desktop-appletsrc'
+    if layout.exists(): shutil.copy2(layout, backup / (layout.name + '.' + stamp))
+    shutil.copytree(source, PACKAGE)
+    # Add an invisible companion to a desktop, not to the panel: no extra panel spacing.
+    script = '''var ds=desktops(); var found=false;
+for(var i=0;i<ds.length;i++){var ws=ds[i].widgets(); for(var j=0;j<ws.length;j++){if(ws[j].type==="local.meta-cue")found=true;}}
+if(!found){if(!ds.length)throw new Error("No desktop available");ds[0].addWidget("local.meta-cue");}print("display-installed");'''
+    try: print(plasma(script))
+    except Exception:
+        shutil.rmtree(PACKAGE)
+        raise
+
+def start():
+    if os.environ.get('XDG_SESSION_TYPE') != 'wayland':
+        raise SystemExit('Meta Cue currently supports KDE Wayland only.')
+    plugins = dbus('org.kde.KWin','/Plugins','org.kde.KWin.Plugins.LoadedPlugins').splitlines()
+    if 'meta_cue_input' not in plugins:
+        result = dbus('org.kde.KWin','/Plugins','org.kde.KWin.Plugins.LoadPlugin','meta_cue_input')
+        if result != 'true':
+            raise SystemExit('KWin input plugin unavailable or version mismatch. Run: sudo ./scripts/install-input.sh')
+    print(dbus('org.kde.KWin','/MetaCue/Input','org.kde.MetaCue.Input.Version'))
+
+def stop():
+    dbus('org.kde.MetaCue','/MetaCue','org.kde.MetaCue.Stop',check=False)
+    dbus('org.kde.KWin','/Plugins','org.kde.KWin.Plugins.UnloadPlugin','meta_cue_input',check=False)
+
+def autostart():
+    folder=CONFIG/'autostart'; folder.mkdir(parents=True,exist_ok=True)
+    # Desktop Entry exec quoting (no shell evaluation).
+    command=str(Path(__file__).resolve()).replace('\\','\\\\').replace('"','\\"').replace('`','\\`').replace('$','\\$').replace('%','%%')
+    (folder/'meta-cue.desktop').write_text('[Desktop Entry]\nType=Application\nName=Meta Cue\nExec="'+command+'" start\nOnlyShowIn=KDE;\nX-KDE-autostart-phase=2\nTerminal=false\n')
+    print('Autostart enabled')
+
+def uninstall():
+    stop()
+    (CONFIG/'autostart/meta-cue.desktop').unlink(missing_ok=True)
+    print(plasma('''var ds=desktops();for(var i=0;i<ds.length;i++){var ws=ds[i].widgets();for(var j=0;j<ws.length;j++){if(ws[j].type==="local.meta-cue")ws[j].remove();}}print("display-removed");'''))
+    if PACKAGE.exists(): shutil.rmtree(PACKAGE)
+    print('User component removed. Remove input plugin with: sudo ./scripts/install-input.sh --remove')
+
+parser=argparse.ArgumentParser()
+parser.add_argument('command',choices=['install-display','start','stop','status','preview','enable-autostart','disable-autostart','uninstall'])
+args=parser.parse_args()
+try:
+    if args.command=='install-display': install_display()
+    elif args.command=='start': start()
+    elif args.command=='stop': stop()
+    elif args.command=='status':
+        print('Input:', dbus('org.kde.KWin','/MetaCue/Input','org.kde.MetaCue.Input.Version',check=False) or 'not loaded')
+        print('Display:', dbus('org.kde.MetaCue','/MetaCue','org.kde.MetaCue.Status',check=False) or 'not loaded')
+    elif args.command=='preview': print(dbus('org.kde.MetaCue','/MetaCue','org.kde.MetaCue.Preview'))
+    elif args.command=='enable-autostart': autostart()
+    elif args.command=='disable-autostart': (CONFIG/'autostart/meta-cue.desktop').unlink(missing_ok=True)
+    elif args.command=='uninstall': uninstall()
+except subprocess.CalledProcessError as e:
+    print(e.stderr or str(e),file=sys.stderr); sys.exit(1)

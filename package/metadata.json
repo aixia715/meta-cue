@@ -1,0 +1,1 @@
+{"KPackageStructure":"Plasma/Applet","KPlugin":{"Id":"local.meta-cue","Name":"Meta Cue","Description":"Number hints for the existing task manager","Version":"0.1.0","License":"GPL-2.0-or-later","Category":"Utilities","Icon":"input-keyboard"},"X-Plasma-API-Minimum-Version":"6.0","X-Plasma-API":"declarativeappletscript","X-Plasma-MainScript":"ui/main.qml"}
