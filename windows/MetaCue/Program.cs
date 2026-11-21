@@ -33,6 +33,7 @@ internal static class Program
 internal sealed class CueApplication : ApplicationContext
 {
     private readonly Gesture gesture = new();
+    private readonly HintQueryGate queries = new();
     private readonly Native.HookProc callback;
     private readonly IntPtr hook;
     private readonly NotifyIcon tray;
@@ -41,9 +42,9 @@ internal sealed class CueApplication : ApplicationContext
     private readonly Badge overlay = new();
     private readonly Stopwatch elapsed = new();
     private readonly string configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MetaCue", "delay-ms.txt");
-    private int generation, delay = 300;
-    private bool enabled = true, querying, preview, shown, disposed;
-    private long lastRefresh, queryStarted;
+    private int delay = 300;
+    private bool enabled = true, preview, shown, disposed;
+    private long lastRefresh, retryAt;
     private List<Rectangle> positions = new();
 
     internal CueApplication()
@@ -72,8 +73,20 @@ internal sealed class CueApplication : ApplicationContext
     private void SeedPressedKeys()
     {
         gesture.Reset();
+        foreach (int key in PressedKeys()) gesture.Update(key, true);
+    }
+
+    private static List<int> PressedKeys()
+    {
+        var keys = new List<int>();
         for (int key = 8; key < 256; key++)
-            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0) gesture.Update(key, true);
+        {
+            // The hook reports sided modifiers. Do not seed their generic aliases,
+            // which would otherwise remain down after a sided key-up.
+            if (key is 0x10 or 0x11 or 0x12) continue;
+            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0) keys.Add(key);
+        }
+        return keys;
     }
 
     private IntPtr Keyboard(int code, IntPtr w, IntPtr data)
@@ -84,7 +97,9 @@ internal sealed class CueApplication : ApplicationContext
             bool pressed = message == 0x100 || message == 0x104;
             if (pressed || message == 0x101 || message == 0x105)
             {
-                bool arm = gesture.Update(Marshal.ReadInt32(data), pressed);
+                int key = Marshal.ReadInt32(data);
+                bool arm = pressed && key is 0x5B or 0x5C
+                    ? gesture.WinDown(key, PressedKeys()) : gesture.Update(key, pressed);
                 if (!gesture.Eligible) Cancel();
                 else if (arm && enabled)
                 {
@@ -99,10 +114,17 @@ internal sealed class CueApplication : ApplicationContext
 
     private void Cancel()
     {
-        generation++;
+        queries.Invalidate();
         timer.Stop();
         elapsed.Reset();
-        preview = shown = false;
+        preview = false;
+        retryAt = 0;
+        HideHints();
+    }
+
+    private void HideHints()
+    {
+        shown = false;
         overlay.Hide();
         positions.Clear();
     }
@@ -128,7 +150,13 @@ internal sealed class CueApplication : ApplicationContext
         bool winHeld = (Native.GetAsyncKeyState(0x5B) & 0x8000) != 0 || (Native.GetAsyncKeyState(0x5C) & 0x8000) != 0;
         if (preview ? elapsed.ElapsedMilliseconds >= 2000 : !gesture.Eligible || !winHeld)
         { Cancel(); return; }
-        if (querying && Environment.TickCount64 - queryStarted > 600) { Cancel(); return; }
+        long now = Environment.TickCount64;
+        if (queries.Busy)
+        {
+            if (queries.Overdue(now)) HideHints();
+            return;
+        }
+        if (now < retryAt) return;
         if (!shown && positions.Count > 0)
         {
             if (preview || elapsed.ElapsedMilliseconds >= delay) Present();
@@ -136,16 +164,14 @@ internal sealed class CueApplication : ApplicationContext
         }
         // Resolve positions during the hold delay instead of adding UIA latency after it.
         if (!preview && elapsed.ElapsedMilliseconds < Math.Max(0, delay - 250)) return;
-        if (querying || (shown && elapsed.ElapsedMilliseconds - lastRefresh < 200)) return;
-        querying = true;
-        queryStarted = Environment.TickCount64;
-        int stamp = generation;
+        if (shown && elapsed.ElapsedMilliseconds - lastRefresh < 200) return;
+        if (!queries.TryBegin(now, out var ticket)) return;
         try
         {
             // UI Automation can block in Explorer; never call it from the keyboard hook.
             var found = await Task.Run(Taskbar.Read);
-            if (disposed || stamp != generation) return;
-            if (found.Count == 0) { Cancel(); return; }
+            if (disposed || !queries.IsCurrent(ticket)) return;
+            if (found.Count == 0) { HideHints(); retryAt = Environment.TickCount64 + 100; return; }
             if (shown)
             {
                 bool changed = found.Count != positions.Count;
@@ -158,13 +184,21 @@ internal sealed class CueApplication : ApplicationContext
             if (preview || elapsed.ElapsedMilliseconds >= delay) Present();
         }
         catch (Exception ex) when (ex is System.Windows.Automation.ElementNotAvailableException || ex is COMException || ex is InvalidOperationException)
-        { if (!disposed && stamp == generation) Cancel(); }
-        finally { querying = false; }
+        {
+            if (!disposed && queries.IsCurrent(ticket))
+            { HideHints(); retryAt = Environment.TickCount64 + 100; }
+        }
+        finally { queries.Complete(ticket); }
     }
 
     private void Present()
     {
-        if (!preview && !Native.MaskStartMenu()) { Cancel(); return; }
+        // A query can finish between timer ticks after a release that the hook missed.
+        if (!preview && (!gesture.Eligible ||
+            ((Native.GetAsyncKeyState(0x5B) & 0x8000) == 0 && (Native.GetAsyncKeyState(0x5C) & 0x8000) == 0)))
+        { Cancel(); return; }
+        if (!preview && !Native.MaskStartMenu())
+        { HideHints(); retryAt = Environment.TickCount64 + 100; return; }
         try { overlay.Present(positions); }
         catch (Win32Exception) { Cancel(); return; }
         shown = true;
