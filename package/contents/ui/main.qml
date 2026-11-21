@@ -6,6 +6,8 @@ PlasmoidItem {
     id: root
     implicitWidth: 0
     implicitHeight: 0
+    // HiddenStatus does not suppress the desktop containment's applet frame.
+    Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
     Plasmoid.status: PlasmaCore.Types.HiddenStatus
     preferredRepresentation: fullRepresentation
     fullRepresentation: Item { implicitWidth: 0; implicitHeight: 0 }
