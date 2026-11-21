@@ -18,6 +18,29 @@ internal static class Program
     private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        if (args.Length == 2 && args[0] == "--diagnose-groups")
+        {
+            var items = Taskbar.ReadItems();
+            var windows = WindowCatalog.Read();
+            var lines = new List<string>();
+            var shortcuts = ShortcutCatalog.Read(lines.Add);
+            for (int i = 0; i < items.Count; i++)
+                lines.Add($"{i + 1}: {items[i].AppId} | matched windows: {WindowCatalog.Match(items[i], items, windows, shortcuts).Count}");
+            foreach (var pair in shortcuts)
+                lines.Add($"Shortcut: {pair.Key} | {string.Join("; ", pair.Value)}");
+            foreach (var window in windows)
+                lines.Add($"Window: {window.Handle:X} | {window.AppId} | {window.Path}");
+            File.WriteAllLines(args[1], lines);
+            return;
+        }
+        if (args.Length == 2 && args[0] == "--diagnose-windows")
+        {
+            var lines = new List<string>();
+            foreach (var window in WindowCatalog.Read())
+                lines.Add($"{window.Handle:X} | {window.ProcessId} | {window.AppId} | {window.Path}");
+            File.WriteAllLines(args[1], lines);
+            return;
+        }
         if (args.Length == 2 && args[0] == "--diagnose")
         {
             File.WriteAllText(args[1], Taskbar.Diagnose());
@@ -33,6 +56,9 @@ internal static class Program
 internal sealed class CueApplication : ApplicationContext
 {
     private readonly Gesture gesture = new();
+    private readonly ExtendedGesture extendedGesture = new();
+    private readonly ExtendedSwitcher extended;
+    private bool extendedEnabled = true;
     private readonly Native.HookProc callback;
     private readonly IntPtr hook;
     private readonly NotifyIcon tray;
@@ -54,14 +80,20 @@ internal sealed class CueApplication : ApplicationContext
         callback = Keyboard;
         hook = Native.SetWindowsHookEx(13, callback, Native.GetModuleHandle(null), 0);
         if (hook == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Meta Cue — 长按 Win 显示编号" };
+        extended = new ExtendedSwitcher(message => tray.ShowBalloonTip(3000, "Meta Cue", message, ToolTipIcon.Info));
         var menu = new ContextMenuStrip();
         menu.Items.Add("预览 2 秒", null, (_, _) => StartPreview());
         var toggle = new ToolStripMenuItem("启用") { Checked = true, CheckOnClick = true };
-        toggle.CheckedChanged += (_, _) => { enabled = toggle.Checked; Cancel(); };
+        toggle.CheckedChanged += (_, _) => { enabled = toggle.Checked; Cancel(); extended.Cancel(); SeedPressedKeys(); };
         menu.Items.Add(toggle);
+        var extendedToggle = new ToolStripMenuItem("Win+Shift+数字切换第 11～20 项") { Checked = true, CheckOnClick = true };
+        extendedToggle.CheckedChanged += (_, _) => { extendedEnabled = extendedToggle.Checked; extended.Cancel(); SeedPressedKeys(); };
+        menu.Items.Add(extendedToggle);
         menu.Items.Add("重新读取延迟配置", null, (_, _) => { Cancel(); LoadDelay(); });
         menu.Items.Add("退出", null, (_, _) => ExitThread());
-        tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Meta Cue — 长按 Win 显示编号", ContextMenuStrip = menu, Visible = true };
+        tray.ContextMenuStrip = menu;
+        tray.Visible = true;
         tray.DoubleClick += (_, _) => StartPreview();
         timer.Tick += Tick;
         SystemEvents.SessionSwitch += SessionChanged;
@@ -72,8 +104,10 @@ internal sealed class CueApplication : ApplicationContext
     private void SeedPressedKeys()
     {
         gesture.Reset();
+        extendedGesture.Reset();
         for (int key = 8; key < 256; key++)
-            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0) gesture.Update(key, true);
+            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0)
+            { gesture.Update(key, true); extendedGesture.Update(key, true, false); }
     }
 
     private IntPtr Keyboard(int code, IntPtr w, IntPtr data)
@@ -84,7 +118,13 @@ internal sealed class CueApplication : ApplicationContext
             bool pressed = message == 0x100 || message == 0x104;
             if (pressed || message == 0x101 || message == 0x105)
             {
-                bool arm = gesture.Update(Marshal.ReadInt32(data), pressed);
+                int key = Marshal.ReadInt32(data);
+                var switching = extendedGesture.Update(key, pressed, enabled && extendedEnabled);
+                if (switching.Action != SwitchAction.None)
+                    dispatcher.BeginInvoke(new Action(() => extended.Handle(switching)));
+                else if (pressed && !switching.Consume && !extendedGesture.Chord)
+                    dispatcher.BeginInvoke(new Action(extended.Cancel));
+                bool arm = gesture.Update(key, pressed);
                 if (!gesture.Eligible) Cancel();
                 else if (arm && enabled)
                 {
@@ -92,6 +132,7 @@ internal sealed class CueApplication : ApplicationContext
                     elapsed.Restart();
                     timer.Start();
                 }
+                if (switching.Consume) return new IntPtr(1);
             }
         }
         return Native.CallNextHookEx(hook, code, w, data);
@@ -117,6 +158,7 @@ internal sealed class CueApplication : ApplicationContext
 
     private void StartPreview()
     {
+        extended.Cancel();
         Cancel();
         preview = true;
         elapsed.Restart();
@@ -174,7 +216,7 @@ internal sealed class CueApplication : ApplicationContext
     private void ResetSession()
     {
         if (disposed) return;
-        try { dispatcher.BeginInvoke(new Action(() => { Cancel(); SeedPressedKeys(); })); }
+        try { dispatcher.BeginInvoke(new Action(() => { Cancel(); extended.Cancel(); SeedPressedKeys(); })); }
         catch (InvalidOperationException) { }
     }
     private void SessionChanged(object sender, SessionSwitchEventArgs e) => ResetSession();
@@ -189,7 +231,7 @@ internal sealed class CueApplication : ApplicationContext
             SystemEvents.PowerModeChanged -= PowerChanged;
             SystemEvents.DisplaySettingsChanged -= DisplayChanged;
             Native.UnhookWindowsHookEx(hook);
-            Cancel(); timer.Dispose(); overlay.Dispose();
+            Cancel(); timer.Dispose(); overlay.Dispose(); extended.Dispose();
             tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); dispatcher.Dispose();
         }
         base.Dispose(disposing);
