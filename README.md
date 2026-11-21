@@ -1,5 +1,9 @@
 # Meta Cue
 
+## Windows 版本
+
+Windows 原生托盘版本位于 [`windows/`](windows/README.md)，在 `feature/windows` 分支开发。支持长按 Win 显示任务栏数字角标的实现、配置及便携发布脚本；构建和状态机测试已通过，真实 Explorer 桌面交互仍待验收。Linux 构建保持原有流程。
+
 给现有 KDE 原生任务栏添加 Meta＋数字提示。按住 Meta 300 毫秒后，在图标上沿显示 1～9；松开或组成其他快捷键时消失。
 
 数字提示触发后，松开 Meta 只隐藏数字，不弹出应用启动器。未达到显示延迟的短按 Meta 仍正常打开启动器。Meta＋反引号保持 KDE 原有快捷键行为，不再作为专用取消键。

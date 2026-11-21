@@ -2,3 +2,6 @@
 *.user
 
 __pycache__/
+/windows/**/bin/
+/windows/**/obj/
+/windows/artifacts/

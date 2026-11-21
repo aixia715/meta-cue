@@ -1,0 +1,197 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Microsoft.Win32;
+
+namespace MetaCue;
+
+internal static class Program
+{
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        ApplicationConfiguration.Initialize();
+        if (args.Length == 2 && args[0] == "--diagnose")
+        {
+            File.WriteAllText(args[1], Taskbar.Diagnose());
+            return;
+        }
+        using var single = new Mutex(true, @"Local\MetaCue.Windows", out bool first);
+        if (!first) return;
+        try { using var app = new CueApplication(); Application.Run(app); }
+        catch (Exception e) { MessageBox.Show(e.Message, "Meta Cue", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+}
+
+internal sealed class CueApplication : ApplicationContext
+{
+    private readonly Gesture gesture = new();
+    private readonly Native.HookProc callback;
+    private readonly IntPtr hook;
+    private readonly NotifyIcon tray;
+    private readonly System.Windows.Forms.Timer timer = new() { Interval = 40 };
+    private readonly Control dispatcher = new();
+    private readonly Badge overlay = new();
+    private readonly Stopwatch elapsed = new();
+    private readonly string configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MetaCue", "delay-ms.txt");
+    private int generation, delay = 300;
+    private bool enabled = true, querying, preview, shown, disposed;
+    private long lastRefresh, queryStarted;
+    private List<Rectangle> positions = new();
+
+    internal CueApplication()
+    {
+        _ = dispatcher.Handle;
+        LoadDelay();
+        SeedPressedKeys();
+        callback = Keyboard;
+        hook = Native.SetWindowsHookEx(13, callback, Native.GetModuleHandle(null), 0);
+        if (hook == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("预览 2 秒", null, (_, _) => StartPreview());
+        var toggle = new ToolStripMenuItem("启用") { Checked = true, CheckOnClick = true };
+        toggle.CheckedChanged += (_, _) => { enabled = toggle.Checked; Cancel(); };
+        menu.Items.Add(toggle);
+        menu.Items.Add("重新读取延迟配置", null, (_, _) => { Cancel(); LoadDelay(); });
+        menu.Items.Add("退出", null, (_, _) => ExitThread());
+        tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Meta Cue — 长按 Win 显示编号", ContextMenuStrip = menu, Visible = true };
+        tray.DoubleClick += (_, _) => StartPreview();
+        timer.Tick += Tick;
+        SystemEvents.SessionSwitch += SessionChanged;
+        SystemEvents.PowerModeChanged += PowerChanged;
+        SystemEvents.DisplaySettingsChanged += DisplayChanged;
+    }
+
+    private void SeedPressedKeys()
+    {
+        gesture.Reset();
+        for (int key = 8; key < 256; key++)
+            if ((Native.GetAsyncKeyState(key) & 0x8000) != 0) gesture.Update(key, true);
+    }
+
+    private IntPtr Keyboard(int code, IntPtr w, IntPtr data)
+    {
+        if (code >= 0 && (Marshal.ReadInt32(data, 8) & 0x10) == 0)
+        {
+            int message = w.ToInt32();
+            bool pressed = message == 0x100 || message == 0x104;
+            if (pressed || message == 0x101 || message == 0x105)
+            {
+                bool arm = gesture.Update(Marshal.ReadInt32(data), pressed);
+                if (!gesture.Eligible) Cancel();
+                else if (arm && enabled)
+                {
+                    Cancel();
+                    elapsed.Restart();
+                    timer.Start();
+                }
+            }
+        }
+        return Native.CallNextHookEx(hook, code, w, data);
+    }
+
+    private void Cancel()
+    {
+        generation++;
+        timer.Stop();
+        elapsed.Reset();
+        preview = shown = false;
+        overlay.Hide();
+        positions.Clear();
+    }
+
+    private void LoadDelay()
+    {
+        delay = 300;
+        try { if (int.TryParse(File.ReadAllText(configPath).Trim(), out int value)) delay = Math.Clamp(value, 100, 2000); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private void StartPreview()
+    {
+        Cancel();
+        preview = true;
+        elapsed.Restart();
+        timer.Start();
+    }
+
+    private async void Tick(object? sender, EventArgs e)
+    {
+        bool winHeld = (Native.GetAsyncKeyState(0x5B) & 0x8000) != 0 || (Native.GetAsyncKeyState(0x5C) & 0x8000) != 0;
+        if (preview ? elapsed.ElapsedMilliseconds >= 2000 : !gesture.Eligible || !winHeld)
+        { Cancel(); return; }
+        if (querying && Environment.TickCount64 - queryStarted > 600) { Cancel(); return; }
+        if (!shown && positions.Count > 0)
+        {
+            if (preview || elapsed.ElapsedMilliseconds >= delay) Present();
+            return;
+        }
+        // Resolve positions during the hold delay instead of adding UIA latency after it.
+        if (!preview && elapsed.ElapsedMilliseconds < Math.Max(0, delay - 250)) return;
+        if (querying || (shown && elapsed.ElapsedMilliseconds - lastRefresh < 200)) return;
+        querying = true;
+        queryStarted = Environment.TickCount64;
+        int stamp = generation;
+        try
+        {
+            // UI Automation can block in Explorer; never call it from the keyboard hook.
+            var found = await Task.Run(Taskbar.Read);
+            if (disposed || stamp != generation) return;
+            if (found.Count == 0) { Cancel(); return; }
+            if (shown)
+            {
+                bool changed = found.Count != positions.Count;
+                for (int i = 0; !changed && i < found.Count; i++) changed = found[i] != positions[i];
+                if (changed) Cancel();
+                lastRefresh = elapsed.ElapsedMilliseconds;
+                return;
+            }
+            positions = found;
+            if (preview || elapsed.ElapsedMilliseconds >= delay) Present();
+        }
+        catch (Exception ex) when (ex is System.Windows.Automation.ElementNotAvailableException || ex is COMException || ex is InvalidOperationException)
+        { if (!disposed && stamp == generation) Cancel(); }
+        finally { querying = false; }
+    }
+
+    private void Present()
+    {
+        if (!preview && !Native.MaskStartMenu()) { Cancel(); return; }
+        try { overlay.Present(positions); }
+        catch (Win32Exception) { Cancel(); return; }
+        shown = true;
+        lastRefresh = elapsed.ElapsedMilliseconds;
+    }
+
+    private void ResetSession()
+    {
+        if (disposed) return;
+        try { dispatcher.BeginInvoke(new Action(() => { Cancel(); SeedPressedKeys(); })); }
+        catch (InvalidOperationException) { }
+    }
+    private void SessionChanged(object sender, SessionSwitchEventArgs e) => ResetSession();
+    private void PowerChanged(object sender, PowerModeChangedEventArgs e) => ResetSession();
+    private void DisplayChanged(object? sender, EventArgs e) => ResetSession();
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !disposed)
+        {
+            disposed = true;
+            SystemEvents.SessionSwitch -= SessionChanged;
+            SystemEvents.PowerModeChanged -= PowerChanged;
+            SystemEvents.DisplaySettingsChanged -= DisplayChanged;
+            Native.UnhookWindowsHookEx(hook);
+            Cancel(); timer.Dispose(); overlay.Dispose();
+            tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); dispatcher.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}
