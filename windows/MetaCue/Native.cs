@@ -22,13 +22,21 @@ internal static class Native
     }
     [StructLayout(LayoutKind.Sequential)] private struct KEYBDINPUT { public ushort vk, scan; public uint flags, time; public UIntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] private struct MOUSEINPUT { public int x, y; public uint data, flags, time; public UIntPtr extra; }
-    // Mark Win as a used modifier without changing any real shortcut or swallowing its release.
-    internal static bool MaskStartMenu()
+    // Keep the Ctrl tap immediately before Win-up, even if Win repeated after showing the badges.
+    internal static bool ReleaseWinWithoutStartMenu(int winKey, int winScan)
     {
-        var inputs = new INPUT[2];
-        inputs[0].type = inputs[1].type = 1;
-        inputs[0].data.keyboard.vk = inputs[1].data.keyboard.vk = 0xE8;
-        inputs[1].data.keyboard.flags = 2;
-        return SendInput(2, inputs, Marshal.SizeOf<INPUT>()) == 2;
+        const uint keyboard = 1, extended = 0x0001, keyUp = 0x0002, scanCode = 0x0008;
+        var inputs = new INPUT[3];
+        inputs[0].type = inputs[1].type = inputs[2].type = keyboard;
+        inputs[0].data.keyboard.scan = inputs[1].data.keyboard.scan = 0x1D; // Left Ctrl
+        inputs[0].data.keyboard.flags = scanCode;
+        inputs[1].data.keyboard.flags = scanCode | keyUp;
+        inputs[2].data.keyboard.vk = (ushort)winKey;
+        inputs[2].data.keyboard.scan = (ushort)winScan;
+        inputs[2].data.keyboard.flags = extended | keyUp;
+        int inputSize = Marshal.SizeOf<INPUT>();
+        uint sent = SendInput(3, inputs, inputSize);
+        if (sent == 1) SendInput(1, new[] { inputs[1] }, inputSize);
+        return sent == 3;
     }
 }

@@ -31,7 +31,7 @@
 
 - 通过 UI Automation 读取原生任务栏应用按钮的真实屏幕矩形，不复制任务栏。仅识别已知应用按钮类，不猜测 Start、搜索或托盘按钮的编号。
 - 目前仅主任务栏、底部单行布局；副屏任务栏、第三方任务栏、Windows 10、溢出和取消合并布局没有通过兼容性验收，不宣称支持。建议使用合并应用按钮且无溢出的布局。
-- Windows 并没有这里使用的 KWin 私有“取消仅修饰键序列”接口。因此在首次显示前以 `SendInput` 发送未分配虚拟键 `0xE8` 的按下/松开，抑制本次开始菜单。**与 Linux 原版不同，这里存在合成键事件**；不吞掉 Win 的按下/松开，不改写 Win+数字绑定。受 UIPI 限制无法发送时取消显示，管理员窗口和安全桌面行为待实测。参考 [SendInput](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendinput)。
+- 显示过编号后直接松开 Win 时，键盘钩子通过 `SendInput` 将合成的左 Ctrl 按下、松开和同侧 Win 松开作为一批提交。提交成功后拦截原始 Win 松键，发送失败时放行原事件。短按和 Win+数字直接交给 Windows。管理员窗口和安全桌面行为待实测。参考 [SendInput](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendinput)。
 - 角标不激活窗口，使用透明 layered 窗口穿透鼠标；参考 [Windows layered window behavior](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features)。开启 PerMonitorV2，但混合缩放下对齐仍需实机验收。
 - 仅手势/预览期间启动计时器，显示时每 200 ms 检查位置。UIA 查询超过 600 ms 时隐藏旧角标，但保留当前长按，查询恢复后仍可显示；短暂识别失败时每隔至少 100 ms 重试。旧手势遗留查询不能取消新手势，也不能在松键后显示。布局变化或会话/电源/显示配置变化时取消。Explorer 无响应时最多保留一个查询，不堆积线程。
 - 每次新的 Win 按下会以实际按键状态校正遗漏的释放事件；保留真正按住的修饰键及组合键取消语义，重复按下不会重新启动计时。初始化只记录左右修饰键，不重复记录通用 Ctrl/Shift/Alt 别名。

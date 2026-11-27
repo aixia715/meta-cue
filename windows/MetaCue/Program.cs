@@ -44,7 +44,7 @@ internal sealed class CueApplication : ApplicationContext
     private readonly Stopwatch elapsed = new();
     private readonly string configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MetaCue", "delay-ms.txt");
     private int delay = 300;
-    private bool enabled = true, preview, shown, disposed;
+    private bool enabled = true, preview, shown, presentedDuringHold, disposed;
     private long lastRefresh, retryAt;
     private List<Rectangle> positions = new();
 
@@ -77,6 +77,7 @@ internal sealed class CueApplication : ApplicationContext
 
     private void SeedPressedKeys()
     {
+        presentedDuringHold = false;
         gesture.Reset();
         foreach (int key in PressedKeys()) gesture.Update(key, true);
     }
@@ -103,8 +104,12 @@ internal sealed class CueApplication : ApplicationContext
             if (pressed || message == 0x101 || message == 0x105)
             {
                 int key = Marshal.ReadInt32(data);
-                bool arm = pressed && key is 0x5B or 0x5C
+                bool winKey = key is 0x5B or 0x5C;
+                bool cancelRelease = !pressed && winKey && presentedDuringHold && gesture.Eligible
+                    && (Native.GetAsyncKeyState(key) & 0x8000) != 0;
+                bool arm = pressed && winKey
                     ? gesture.WinDown(key, PressedKeys()) : gesture.Update(key, pressed);
+                if (arm || !gesture.Eligible) presentedDuringHold = false;
                 if (!gesture.Eligible) Cancel();
                 else if (arm && enabled)
                 {
@@ -112,6 +117,8 @@ internal sealed class CueApplication : ApplicationContext
                     elapsed.Restart();
                     timer.Start();
                 }
+                if (cancelRelease && Native.ReleaseWinWithoutStartMenu(key, Marshal.ReadInt32(data, 4)))
+                    return new IntPtr(1);
             }
         }
         return Native.CallNextHookEx(hook, code, w, data);
@@ -203,11 +210,10 @@ internal sealed class CueApplication : ApplicationContext
         if (!preview && (!gesture.Eligible ||
             ((Native.GetAsyncKeyState(0x5B) & 0x8000) == 0 && (Native.GetAsyncKeyState(0x5C) & 0x8000) == 0)))
         { Cancel(); return; }
-        if (!preview && !Native.MaskStartMenu())
-        { HideHints(); retryAt = Environment.TickCount64 + 100; return; }
         try { overlay.Present(positions); }
         catch (Win32Exception) { Cancel(); return; }
         shown = true;
+        if (!preview) presentedDuringHold = true;
         lastRefresh = elapsed.ElapsedMilliseconds;
     }
 
